@@ -74,7 +74,11 @@ func (srv *MuxTerminalService) Open(ctx context.Context, req *api.OpenTerminalRe
 // OpenWithOptions opens a new terminal running the shell with given options.
 // req.Annotations override options.Annotations.
 func (srv *MuxTerminalService) OpenWithOptions(ctx context.Context, req *api.OpenTerminalRequest, options TermOptions) (*api.OpenTerminalResponse, error) {
-	cmd := exec.Command(srv.DefaultShell)
+	shell := req.Shell
+	if shell == "" {
+		shell = srv.DefaultShell
+	}
+	cmd := exec.Command(shell, req.ShellArgs...)
 	if req.Workdir == "" {
 		cmd.Dir = srv.DefaultWorkdir
 	} else {
@@ -86,6 +90,14 @@ func (srv *MuxTerminalService) OpenWithOptions(ctx context.Context, req *api.Ope
 	}
 	for k, v := range req.Annotations {
 		options.Annotations[k] = v
+	}
+	if req.Size != nil {
+		options.Size = &pty.Winsize{
+			Cols: uint16(req.Size.Cols),
+			Rows: uint16(req.Size.Rows),
+			X:    uint16(req.Size.WidthPx),
+			Y:    uint16(req.Size.HeightPx),
+		}
 	}
 	alias, err := srv.Mux.Start(cmd, options)
 	if err != nil {
@@ -102,6 +114,9 @@ func (srv *MuxTerminalService) OpenWithOptions(ctx context.Context, req *api.Ope
 	return &api.OpenTerminalResponse{
 		Alias:        alias,
 		StarterToken: starterToken,
+		Pid:          int64(term.Command.Process.Pid),
+		Workdir:      term.Command.Dir,
+		// TODO title
 	}, nil
 }
 
@@ -142,6 +157,7 @@ func (srv *MuxTerminalService) List(ctx context.Context, req *api.ListTerminalsR
 			InitialWorkdir: term.Command.Dir,
 			CurrentWorkdir: cwd,
 			Annotations:    term.Annotations,
+			// TODO title
 		})
 	}
 
@@ -163,6 +179,8 @@ func (srv *MuxTerminalService) Listen(req *api.ListenTerminalRequest, resp api.T
 	log.WithField("alias", req.Alias).Info("new terminal client")
 	defer log.WithField("alias", req.Alias).Info("terminal client left")
 
+	// TODO exitCode
+
 	errchan := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 4096)
@@ -173,8 +191,7 @@ func (srv *MuxTerminalService) Listen(req *api.ListenTerminalRequest, resp api.T
 				return
 			}
 
-			// TODO(cw): find out how to separate stdout/stderr
-			err = resp.Send(&api.ListenTerminalResponse{Output: &api.ListenTerminalResponse_Stdout{Stdout: buf[:n]}})
+			err = resp.Send(&api.ListenTerminalResponse{Output: &api.ListenTerminalResponse_Data{Data: buf[:n]}})
 			if err != nil {
 				errchan <- err
 				return

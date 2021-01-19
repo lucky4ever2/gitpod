@@ -90,8 +90,7 @@ func attachToTerminal(ctx context.Context, client api.TerminalServiceClient, ali
 			if err != nil {
 				errchan <- err
 			}
-			os.Stderr.Write(resp.GetStderr())
-			os.Stdout.Write(resp.GetStdout())
+			os.Stdout.Write(resp.GetData())
 		}
 	}()
 

@@ -48,7 +48,7 @@ func (m *Mux) Start(cmd *exec.Cmd, options TermOptions) (alias string, err error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	pty, err := pty.Start(cmd)
+	pty, err := pty.StartWithSize(cmd, options.Size)
 	if err != nil {
 		return "", xerrors.Errorf("cannot start PTY: %w", err)
 	}
@@ -209,6 +209,9 @@ type TermOptions struct {
 
 	// Annotations are user-defined metadata that's attached to a terminal
 	Annotations map[string]string
+
+	// Size describes the terminal size.
+	Size *pty.Winsize
 }
 
 // Term is a pseudo-terminal

@@ -47,10 +47,22 @@ service TerminalService {
     rpc SetSize(SetTerminalSizeRequest) returns (SetTerminalSizeResponse) {}
 }
 
+message TerminalSize {
+    uint32 rows = 6;
+    uint32 cols = 7;
+    uint32 widthPx = 8;
+    uint32 heightPx = 9;
+}
+
 message OpenTerminalRequest {
     string workdir = 1;
     map<string, string> env = 2;
     map<string, string> annotations = 3;
+
+    string shell = 4;
+    repeated string shell_args = 5;
+
+    TerminalSize size = 6;
 }
 message OpenTerminalResponse {
     string alias = 1;
@@ -58,6 +70,10 @@ message OpenTerminalResponse {
     // starter_token can be used to change the terminal size if there are
     // multiple listerns, without having to force your way in.
     string starter_token = 2;
+
+    string title = 3;
+    int64 pid = 4;
+    string workdir = 5;
 }
 
 message CloseTerminalRequest {
@@ -85,8 +101,9 @@ message ListenTerminalRequest {
 }
 message ListenTerminalResponse {
     oneof output {
-        bytes stdout = 1;
-        bytes stderr = 2;
+        bytes data = 1;
+        uint32 exitCode = 2;
+        // TODO title
     };
 }
 

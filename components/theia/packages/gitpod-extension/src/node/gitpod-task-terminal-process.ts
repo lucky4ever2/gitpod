@@ -73,12 +73,11 @@ export class GitpodTaskTerminalProcess extends TerminalProcess {
                     });
                     stream.on('data', (response: ListenTerminalResponse) => {
                         let str = '';
-                        for (const buffer of [response.getStdout(), response.getStderr()]) {
-                            if (typeof buffer === 'string') {
-                                str += buffer;
-                            } else {
-                                str += BinaryBuffer.wrap(buffer).toString()
-                            }
+                        const buffer = response.getData();
+                        if (typeof buffer === 'string') {
+                            str += buffer;
+                        } else {
+                            str += BinaryBuffer.wrap(buffer).toString()
                         }
                         if (str !== '') {
                             this.ringBuffer.enq(str);
