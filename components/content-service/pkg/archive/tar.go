@@ -18,18 +18,18 @@ import (
 	"golang.org/x/xerrors"
 )
 
-type buildTarbalConfig struct {
+type tarConfig struct {
 	MaxSizeBytes int64
 	UIDMaps      []idtools.IDMap
 	GIDMaps      []idtools.IDMap
 }
 
 // BuildTarbalOption configures the tarbal creation
-type BuildTarbalOption func(o *buildTarbalConfig)
+type TarOption func(o *tarConfig)
 
 // TarbalMaxSize limits the size of a tarbal
-func TarbalMaxSize(n int64) BuildTarbalOption {
-	return func(o *buildTarbalConfig) {
+func TarbalMaxSize(n int64) TarOption {
+	return func(o *tarConfig) {
 		o.MaxSizeBytes = n
 	}
 }
@@ -42,8 +42,8 @@ type IDMapping struct {
 }
 
 // WithUIDMapping reverses the given user ID mapping during archive creation
-func WithUIDMapping(mappings []IDMapping) BuildTarbalOption {
-	return func(o *buildTarbalConfig) {
+func WithUIDMapping(mappings []IDMapping) TarOption {
+	return func(o *tarConfig) {
 		o.UIDMaps = make([]idtools.IDMap, len(mappings))
 		for i, m := range mappings {
 			o.UIDMaps[i] = idtools.IDMap{
@@ -56,8 +56,8 @@ func WithUIDMapping(mappings []IDMapping) BuildTarbalOption {
 }
 
 // WithGIDMapping reverses the given user ID mapping during archive creation
-func WithGIDMapping(mappings []IDMapping) BuildTarbalOption {
-	return func(o *buildTarbalConfig) {
+func WithGIDMapping(mappings []IDMapping) TarOption {
+	return func(o *tarConfig) {
 		o.GIDMaps = make([]idtools.IDMap, len(mappings))
 		for i, m := range mappings {
 			o.GIDMaps[i] = idtools.IDMap{
@@ -69,9 +69,34 @@ func WithGIDMapping(mappings []IDMapping) BuildTarbalOption {
 	}
 }
 
+// ExtractTarbal extracts an OCI compatible tar file src to the folder dst, expecting the overlay whiteout format
+func ExtractTarbal(ctx context.Context, src io.Reader, dst string, opts ...TarOption) (err error) {
+	var cfg tarConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	//nolint:staticcheck,ineffassign
+	span, ctx := opentracing.StartSpanFromContext(ctx, "extractTarbal")
+	span.LogKV("src", src, "dst", dst)
+	defer tracing.FinishSpan(span, &err)
+
+	err = archive.Untar(src, dst, &archive.TarOptions{
+		Compression:    archive.Uncompressed,
+		WhiteoutFormat: archive.OverlayWhiteoutFormat,
+		InUserNS:       true,
+		UIDMaps:        cfg.UIDMaps,
+		GIDMaps:        cfg.GIDMaps,
+	})
+	if err != nil {
+		return xerrors.Errorf("cannot create tar: %w", err)
+	}
+	return nil
+}
+
 // BuildTarbal creates an OCI compatible tar file dst from the folder src, expecting the overlay whiteout format
-func BuildTarbal(ctx context.Context, src string, dst string, opts ...BuildTarbalOption) (err error) {
-	var cfg buildTarbalConfig
+func BuildTarbal(ctx context.Context, src string, dst string, opts ...TarOption) (err error) {
+	var cfg tarConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}

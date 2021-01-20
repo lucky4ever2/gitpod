@@ -19,6 +19,7 @@ import (
 	"github.com/gitpod-io/gitpod/common-go/log"
 	"github.com/gitpod-io/gitpod/common-go/tracing"
 	csapi "github.com/gitpod-io/gitpod/content-service/api"
+	"github.com/gitpod-io/gitpod/content-service/pkg/archive"
 	wsinit "github.com/gitpod-io/gitpod/content-service/pkg/initializer"
 	"github.com/gitpod-io/gitpod/content-service/pkg/storage"
 
@@ -35,9 +36,8 @@ type RunInitializerOpts struct {
 	Command string
 	// Args is a set of additional arguments to pass to the initializer executable
 	Args []string
-
-	UID uint32
-	GID uint32
+	// Options to use on untar
+	IdMappings []archive.IDMapping
 
 	OWI map[string]interface{}
 }
@@ -113,13 +113,6 @@ func RunInitializer(ctx context.Context, destination string, initializer *csapi.
 		return err
 	}
 
-	if opts.GID == 0 {
-		opts.GID = wsinit.GitpodGID
-	}
-	if opts.UID == 0 {
-		opts.UID = wsinit.GitpodUID
-	}
-
 	tmpdir, err := ioutil.TempDir("", "content-init")
 	if err != nil {
 		return err
@@ -136,8 +129,7 @@ func RunInitializer(ctx context.Context, destination string, initializer *csapi.
 		Initializer:   init,
 		RemoteContent: remoteContent,
 		TraceInfo:     tracing.GetTraceID(span),
-		GID:           int(opts.GID),
-		UID:           int(opts.UID),
+		IDMappings:    opts.IdMappings,
 		OWI:           opts.OWI,
 	}
 	fc, err := json.MarshalIndent(msg, "", "  ")
@@ -186,8 +178,14 @@ func RunInitializer(ctx context.Context, destination string, initializer *csapi.
 	spec.Hostname = "content-init"
 	spec.Process.Terminal = false
 	spec.Process.NoNewPrivileges = true
-	spec.Process.User.UID = opts.UID
-	spec.Process.User.GID = opts.GID
+	spec.Process.User.UID = wsinit.GitpodUID
+	spec.Process.User.GID = wsinit.GitpodUID
+	// This is a bit of a hack as it makes hard assumptions about the nature of the UID mapping.
+	// With FWB this bit becomes unneccesary.
+	if len(opts.IdMappings) > 0 {
+		spec.Process.User.UID = wsinit.GitpodUID + 100000 - 1
+		spec.Process.User.GID = wsinit.GitpodGID + 100000 - 1
+	}
 	spec.Process.Args = []string{"/app/content-initializer"}
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "JAEGER_") {
@@ -235,7 +233,7 @@ func RunInitializer(ctx context.Context, destination string, initializer *csapi.
 	return nil
 }
 
-// RunInitializerChild is the function that's exepcted to run when we call `/proc/self/exe content-initializer`
+// RunInitializerChild is the function that's exeected to run when we call `/proc/self/exe content-initializer`
 func RunInitializerChild() (err error) {
 	fc, err := ioutil.ReadFile("/content.json")
 	if err != nil {
@@ -274,14 +272,15 @@ func RunInitializerChild() (err error) {
 	initSource, err := wsinit.InitializeWorkspace(ctx, "/dst", rs,
 		wsinit.WithInitializer(initializer),
 		wsinit.WithCleanSlate,
-		wsinit.WithChown(initmsg.UID, initmsg.GID),
+		wsinit.WithMappings(initmsg.IDMappings),
+		wsinit.WithChown(wsinit.GitpodUID, wsinit.GitpodUID),
 	)
 	if err != nil {
 		return err
 	}
 
 	// Place the ready file to make Theia "open its gates"
-	err = wsinit.PlaceWorkspaceReadyFile(ctx, "/dst", initSource, initmsg.UID, initmsg.GID)
+	err = wsinit.PlaceWorkspaceReadyFile(ctx, "/dst", initSource, wsinit.GitpodUID, wsinit.GitpodUID)
 	if err != nil {
 		return err
 	}
@@ -304,7 +303,7 @@ func (rs *remoteContentStorage) EnsureExists(ctx context.Context) error {
 }
 
 // Download always returns false and does nothing
-func (rs *remoteContentStorage) Download(ctx context.Context, destination string, name string) (exists bool, err error) {
+func (rs *remoteContentStorage) Download(ctx context.Context, destination string, name string, mappings []archive.IDMapping) (exists bool, err error) {
 	info, exists := rs.RemoteContent[name]
 	if !exists {
 		return false, nil
@@ -316,21 +315,18 @@ func (rs *remoteContentStorage) Download(ctx context.Context, destination string
 	}
 	defer resp.Body.Close()
 
-	tarcmd := exec.Command("tar", "x")
-	tarcmd.Dir = destination
-	tarcmd.Stdin = resp.Body
+	err = archive.ExtractTarbal(ctx, resp.Body, destination, archive.WithUIDMapping(mappings), archive.WithGIDMapping(mappings))
 
-	msg, err := tarcmd.CombinedOutput()
 	if err != nil {
-		return true, xerrors.Errorf("tar %s: %s", destination, err.Error()+";"+string(msg))
+		return true, xerrors.Errorf("tar %s: %s", destination, err.Error())
 	}
 
 	return true, nil
 }
 
 // DownloadSnapshot always returns false and does nothing
-func (rs *remoteContentStorage) DownloadSnapshot(ctx context.Context, destination string, name string) (bool, error) {
-	return rs.Download(ctx, destination, name)
+func (rs *remoteContentStorage) DownloadSnapshot(ctx context.Context, destination string, name string, mappings []archive.IDMapping) (bool, error) {
+	return rs.Download(ctx, destination, name, mappings)
 }
 
 // Qualify just returns the name
@@ -362,8 +358,7 @@ type msgInitContent struct {
 	Destination   string
 	RemoteContent map[string]storage.DownloadInfo
 	Initializer   []byte
-	UID, GID      int
-
-	TraceInfo string
-	OWI       map[string]interface{}
+	IDMappings    []archive.IDMapping
+	TraceInfo     string
+	OWI           map[string]interface{}
 }
